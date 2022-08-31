@@ -1,0 +1,119 @@
+From fb63af1b690066b517b7f4a067360063d1801a46 Mon Sep 17 00:00:00 2001
+From: Duncan Bellamy <dunk@denkimushi.com>
+Date: Sat, 27 Aug 2022 15:35:37 +0100
+Subject: [PATCH 1/2] V2 resubmitting old statx patch with changes
+
+---
+ include/sys/stat.h | 49 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/stat/statx.c   | 39 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 88 insertions(+)
+ create mode 100644 src/stat/statx.c
+
+diff --git a/include/sys/stat.h b/include/sys/stat.h
+index 10d446c4..21668a51 100644
+--- a/include/sys/stat.h
++++ b/include/sys/stat.h
+@@ -70,6 +70,55 @@ extern "C" {
+ #define UTIME_NOW  0x3fffffff
+ #define UTIME_OMIT 0x3ffffffe
+ 
++#if defined(_GNU_SOURCE)
++#include <stdint.h>
++
++#define STATX_TYPE 1U
++#define STATX_MODE 2U
++#define STATX_NLINK 4U
++#define STATX_UID 8U
++#define STATX_GID 0x10U
++#define STATX_ATIME 0x20U
++#define STATX_MTIME 0x40U
++#define STATX_CTIME 0x80U
++#define STATX_INO 0x100U
++#define STATX_SIZE 0x200U
++#define STATX_BLOCKS 0x400U
++#define STATX_BASIC_STATS 0x7ffU
++#define STATX_BTIME 0x800U
++#define STATX_ALL 0xfffU
++
++struct statx_timestamp {
++	int64_t tv_sec;
++	uint32_t tv_nsec, __pad;
++};
++
++struct statx {
++	uint32_t stx_mask;
++	uint32_t stx_blksize;
++	uint64_t stx_attributes;
++	uint32_t stx_nlink;
++	uint32_t stx_uid;
++	uint32_t stx_gid;
++	uint16_t stx_mode;
++	uint16_t __pad0[1];
++	uint64_t stx_ino;
++	uint64_t stx_size;
++	uint64_t stx_blocks;
++	uint64_t stx_attributes_mask;
++	struct statx_timestamp stx_atime;
++	struct statx_timestamp stx_btime;
++	struct statx_timestamp stx_ctime;
++	struct statx_timestamp stx_mtime;
++	uint32_t stx_rdev_major;
++	uint32_t stx_rdev_minor;
++	uint32_t stx_dev_major;
++	uint32_t stx_dev_minor;
++	uint64_t __pad1[14];
++};
++
++int statx(int, const char *__restrict, int, unsigned, struct statx *__restrict);
++#endif
+ int stat(const char *__restrict, struct stat *__restrict);
+ int fstat(int, struct stat *);
+ int lstat(const char *__restrict, struct stat *__restrict);
+diff --git a/src/stat/statx.c b/src/stat/statx.c
+new file mode 100644
+index 00000000..6788476a
+--- /dev/null
++++ b/src/stat/statx.c
+@@ -0,0 +1,39 @@
++#define _GNU_SOURCE
++#include <sys/stat.h>
++#include <syscall.h>
++#include <sys/sysmacros.h>
++#include <errno.h>
++
++int statx(int dirfd, const char *restrict path, int flags, unsigned mask, struct statx *restrict stx)
++{
++	int ret = __syscall(SYS_statx, dirfd, path, flags, mask, stx);
++	if (ret != -ENOSYS) return __syscall_ret(ret);
++
++	#if defined(SYS_fstatat)
++	struct stat st;
++	ret = fstatat(dirfd, path, &st, flags);
++	if (ret == -ENOSYS) return -1;
++
++	stx->stx_dev_major = major(st.st_dev);
++	stx->stx_dev_minor = minor(st.st_dev);
++	stx->stx_ino = st.st_ino;
++	stx->stx_mode = st.st_mode;
++	stx->stx_nlink = st.st_nlink;
++	stx->stx_uid = st.st_uid;
++	stx->stx_gid = st.st_gid;
++	stx->stx_size = st.st_size;
++	stx->stx_blksize = st.st_blksize;
++	stx->stx_blocks = st.st_blocks;
++	stx->stx_atime.tv_sec = st.st_atim.tv_sec;
++	stx->stx_atime.tv_nsec = st.st_atim.tv_nsec;
++	stx->stx_mtime.tv_sec = st.st_mtim.tv_sec;
++	stx->stx_mtime.tv_nsec = st.st_mtim.tv_nsec;
++	stx->stx_ctime.tv_sec = st.st_ctim.tv_sec;
++	stx->stx_ctime.tv_nsec = st.st_ctim.tv_nsec;
++	stx->stx_btime = (struct statx_timestamp){.tv_sec=0, .tv_nsec=0};
++	stx->stx_mask = STATX_BASIC_STATS;
++	ret = EINVAL;
++	#endif
++
++	return __syscall_ret(ret);
++}
+-- 
+2.37.1
+
